@@ -22,6 +22,7 @@ import { ProtocolSelect } from './components/ProtocolSelect';
 import { ContextMenu } from './components/ContextMenu';
 import { RenameDialog } from './components/RenameDialog';
 import { TopologyDialog } from './components/TopologyDialog';
+import { NetworkIcon } from './components/Icons';
 
 // core logika
 import type {
@@ -1577,7 +1578,9 @@ function AppContent() {
       {/* mobilni varovani — zobrazi se jen na mensich displejich pres CSS */}
       <div className="mobile-warning-overlay">
         <div className="mobile-warning-content">
-          <div className="mobile-warning-icon">🖥️</div>
+          <div className="mobile-warning-icon">
+            <NetworkIcon size={48} className="text-primary" />
+          </div>
           <h2>Mobilní verze není k dispozici</h2>
           <p>Tento simulátor směrovacích protokolů a grafický editor síťových topologií vyžaduje velkou obrazovku a přesné ovládání myší.</p>
           <p>Otevřete prosím aplikaci na <strong>počítači (PC) nebo notebooku</strong>.</p>
