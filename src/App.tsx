@@ -1574,6 +1574,16 @@ function AppContent() {
 
   return (
     <div className="app-layout" style={{ '--pill-speed': (1.05 / animationSpeed) + 's' } as React.CSSProperties}>
+      {/* mobilni varovani — zobrazi se jen na mensich displejich pres CSS */}
+      <div className="mobile-warning-overlay">
+        <div className="mobile-warning-content">
+          <div className="mobile-warning-icon">🖥️</div>
+          <h2>Mobilní verze není k dispozici</h2>
+          <p>Tento simulátor směrovacích protokolů a grafický editor síťových topologií vyžaduje velkou obrazovku a přesné ovládání myší.</p>
+          <p>Otevřete prosím aplikaci na <strong>počítači (PC) nebo notebooku</strong>.</p>
+        </div>
+      </div>
+
       <Toolbar
         onToggleSettings={handleToggleSettings}
         isSettingsOpen={isSettingsOpen}
