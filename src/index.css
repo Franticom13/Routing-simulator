@@ -223,6 +223,7 @@ body {
   flex: 1;
   position: relative;
   overflow: hidden;
+  min-height: 0;
 }
 
 /* teckovy vzor na pozadi */
@@ -1617,6 +1618,191 @@ body {
   to {
     stroke-dashoffset: 0;
   }
+}
+
+/* ===== CANVAS COLUMN — obaluje tab bar + canvas ===== */
+.canvas-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* ===== TAB BAR ===== */
+.tab-bar {
+  display: flex;
+  align-items: center;
+  height: var(--toolbar-height);
+  background: var(--surface);
+  padding: 0 12px;
+  gap: 0;
+  flex-shrink: 0;
+  z-index: 9;
+}
+
+.tab-bar-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  position: relative;
+}
+
+.tab-bar-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* sliding active indicator — plynuly posun mezi taby */
+.tab-indicator {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  top: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  box-shadow: var(--shadow-sm);
+  pointer-events: none;
+  z-index: 0;
+  /* bez transition dokud se neinicializuje */
+  transition: none;
+}
+
+.tab-indicator.ready {
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 36px 0 16px;
+  height: 100%;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.15s ease, opacity 0.15s ease;
+  white-space: nowrap;
+  user-select: none;
+  position: relative;
+  z-index: 1;
+}
+
+.tab-item:hover {
+  color: var(--text-primary);
+}
+
+.tab-item.active {
+  color: var(--primary-dark);
+  font-weight: 600;
+}
+
+.tab-item.dragging {
+  opacity: 0.4;
+}
+
+.tab-item.drop-target {
+  box-shadow: inset 2px 0 0 0 var(--primary);
+}
+
+.tab-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-close {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+  padding: 0;
+  opacity: 0;
+  flex-shrink: 0;
+}
+
+.tab-item:hover .tab-close,
+.tab-item.active .tab-close {
+  opacity: 1;
+}
+
+.tab-close:hover {
+  background: var(--danger-light);
+  color: var(--danger);
+}
+
+.tab-rename-input {
+  border: 1px solid var(--primary);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 13px;
+  font-family: var(--font);
+  font-weight: 500;
+  color: var(--text-primary);
+  background: var(--bg);
+  outline: none;
+  min-width: 30px;
+  box-shadow: 0 0 0 2px var(--primary-lighter);
+}
+
+/* skryty span pro mereni sirky textu v rename inputu */
+.tab-measure {
+  position: absolute;
+  visibility: hidden;
+  height: 0;
+  overflow: hidden;
+  white-space: pre;
+  font-size: 13px;
+  font-family: var(--font);
+  font-weight: 500;
+  padding: 0 6px;
+}
+
+.tab-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+  margin-left: 4px;
+  z-index: 1;
+}
+
+.tab-add:hover {
+  border-color: var(--primary);
+  border-style: solid;
+  color: var(--primary);
+  background: var(--primary-lighter);
+}
+
+.tab-add:active {
+  transform: scale(0.92);
 }
 
 /* ===== MOBILNI VAROVANI OVLADANI ===== */

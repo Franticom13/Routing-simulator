@@ -58,13 +58,15 @@ function RouterNodeComponent({ data, selected }: NodeProps) {
         type="source"
         position={Position.Top}
         id="source"
-        style={{ opacity: 0, top: '50%', left: '50%' }}
+        isConnectable={false}
+        style={{ opacity: 0, top: '50%', left: '50%', pointerEvents: 'none' }}
       />
       <Handle
         type="target"
         position={Position.Top}
         id="target"
-        style={{ opacity: 0, top: '50%', left: '50%' }}
+        isConnectable={false}
+        style={{ opacity: 0, top: '50%', left: '50%', pointerEvents: 'none' }}
       />
 
       {/* animovana ikona routeru */}

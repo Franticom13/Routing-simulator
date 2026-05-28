@@ -23,6 +23,7 @@ import { ContextMenu } from './components/ContextMenu';
 import { RenameDialog } from './components/RenameDialog';
 import { TopologyDialog } from './components/TopologyDialog';
 import { NetworkIcon } from './components/Icons';
+import { TabBar, type TabInfo } from './components/TabBar';
 
 // core logika
 import type {
@@ -47,152 +48,319 @@ import { RIPProtocol } from './core/protocols/RIP';
 import { OSPFProtocol } from './core/protocols/OSPF';
 import { EIGRPProtocol } from './core/protocols/EIGRP';
 
-// pocatecni routery — 7 routeru, sit vyzaduje 4+ iteraci pro konvergenci
-//
-//     A -----1----- B -----3----- C
-//     |             |             |
-//     2             1             2
-//     |             |             |
-//     D -----4----- E -----1----- F
-//                   |
-//                   3
-//                   |
-//                   G
-//
-const INITIAL_NODES: Node[] = [
-  {
-    id: 'r1',
-    type: 'router',
-    position: { x: 80, y: 80 },
-    data: { label: 'Router A' },
-  },
-  {
-    id: 'r2',
-    type: 'router',
-    position: { x: 400, y: 80 },
-    data: { label: 'Router B' },
-  },
-  {
-    id: 'r3',
-    type: 'router',
-    position: { x: 720, y: 80 },
-    data: { label: 'Router C' },
-  },
-  {
-    id: 'r4',
-    type: 'router',
-    position: { x: 80, y: 320 },
-    data: { label: 'Router D' },
-  },
-  {
-    id: 'r5',
-    type: 'router',
-    position: { x: 400, y: 320 },
-    data: { label: 'Router E' },
-  },
-  {
-    id: 'r6',
-    type: 'router',
-    position: { x: 720, y: 320 },
-    data: { label: 'Router F' },
-  },
-  {
-    id: 'r7',
-    type: 'router',
-    position: { x: 400, y: 540 },
-    data: { label: 'Router G' },
-  },
-];
-
-const INITIAL_EDGES: Edge[] = [
-  // horni rada
-  {
-    id: 'e1-2',
-    source: 'r1',
-    target: 'r2',
-    type: 'network',
-    data: { metric: 1 },
-  },
-  {
-    id: 'e2-3',
-    source: 'r2',
-    target: 'r3',
-    type: 'network',
-    data: { metric: 3 },
-  },
-  // vertikalni propoje
-  {
-    id: 'e1-4',
-    source: 'r1',
-    target: 'r4',
-    type: 'network',
-    data: { metric: 2 },
-  },
-  {
-    id: 'e2-5',
-    source: 'r2',
-    target: 'r5',
-    type: 'network',
-    data: { metric: 1 },
-  },
-  {
-    id: 'e3-6',
-    source: 'r3',
-    target: 'r6',
-    type: 'network',
-    data: { metric: 2 },
-  },
-  // dolni rada
-  {
-    id: 'e4-5',
-    source: 'r4',
-    target: 'r5',
-    type: 'network',
-    data: { metric: 4 },
-  },
-  {
-    id: 'e5-6',
-    source: 'r5',
-    target: 'r6',
-    type: 'network',
-    data: { metric: 1 },
-  },
-  // odnoz dolu
-  {
-    id: 'e5-7',
-    source: 'r5',
-    target: 'r7',
-    type: 'network',
-    data: { metric: 3 },
-  },
-];
-
-// ziskani protokolu podle nazvu
-function getProtocol(name: string): Protocol {
-  if (name === 'OSPF') {
-    return OSPFProtocol;
-  }
-  if (name === 'EIGRP') {
-    return EIGRPProtocol;
-  }
-  return RIPProtocol;
+// kazdy tab ma vlastni snapshot stavu grafu a simulace
+interface TabData {
+  id: string;
+  name: string;
+  nodes: Node[];
+  edges: Edge[];
+  selectedProtocol: string;
+  iteration: number;
+  isConverged: boolean;
+  isSimulationRunning: boolean;
+  routingTables: Record<string, RoutingEntry[]>;
+  currentChanges: Change[];
+  simulationState: NetworkState | null;
+  selectedRouterId: string | null;
+  isPathMode: boolean;
+  pathSource: string | null;
+  pathTarget: string | null;
+  ospfPhase: string;
+  routerCounter: number;
 }
 
-// pocitadlo pro generovani unikatnich ID
-let routerCounter = 8;
+// localStorage klic pro persistenci
+const STORAGE_KEY = 'routing-simulator-tabs';
+
+// pocitadlo pro generovani unikatnich tab ID (nikdy se neopakuje)
+let tabIdCounter = 1;
+
+function createEmptyTab(existingNames: string[]): TabData {
+  tabIdCounter = tabIdCounter + 1;
+  // najit nejnizsi cislo ktere jeste neni pouzite
+  var num = 1;
+  while (existingNames.indexOf('Tab ' + num) !== -1) {
+    num = num + 1;
+  }
+  return {
+    id: 'tab-' + tabIdCounter,
+    name: 'Tab ' + num,
+    nodes: [],
+    edges: [],
+    selectedProtocol: 'RIP',
+    iteration: 0,
+    isConverged: false,
+    isSimulationRunning: false,
+    routingTables: {},
+    currentChanges: [],
+    simulationState: null,
+    selectedRouterId: null,
+    isPathMode: false,
+    pathSource: null,
+    pathTarget: null,
+    ospfPhase: '',
+    routerCounter: 1,
+  };
+}
+
+// prvni tab ma ID 'tab-1'
+const INITIAL_TAB: TabData = {
+  id: 'tab-1',
+  name: 'Tab 1',
+  nodes: [],
+  edges: [],
+  selectedProtocol: 'RIP',
+  iteration: 0,
+  isConverged: false,
+  isSimulationRunning: false,
+  routingTables: {},
+  currentChanges: [],
+  simulationState: null,
+  selectedRouterId: null,
+  isPathMode: false,
+  pathSource: null,
+  pathTarget: null,
+  ospfPhase: '',
+  routerCounter: 1,
+};
+
+// nacist taby z localStorage
+function loadTabsFromStorage(): { tabs: TabData[]; activeTabId: string } | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) { return null; }
+    const parsed = JSON.parse(raw);
+    if (!parsed.tabs || !Array.isArray(parsed.tabs) || parsed.tabs.length === 0) {
+      return null;
+    }
+    // obnovit tabIdCounter na nejvyssi pouzite ID
+    let maxId = 1;
+    parsed.tabs.forEach(function (tab: any) {
+      const match = tab.id.match(/^tab-(\d+)$/);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxId) { maxId = num; }
+      }
+    });
+    tabIdCounter = maxId;
+    // simulationState neni serializovatelny — vzdy null pri nacteni
+    const cleanedTabs: TabData[] = parsed.tabs.map(function (tab: any) {
+      return {
+        ...tab,
+        simulationState: null,
+        isSimulationRunning: false,
+      };
+    });
+    return { tabs: cleanedTabs, activeTabId: parsed.activeTabId || cleanedTabs[0].id };
+  } catch {
+    return null;
+  }
+}
+
+// cache pro inicializaci — volat loadTabsFromStorage pouze jednou
+const CACHED_STORAGE = loadTabsFromStorage();
+
+// ulozit taby do localStorage
+function saveTabsToStorage(tabs: TabData[], activeTabId: string) {
+  try {
+    // odstranit simulationState pred ulozenim (neni serializovatelny)
+    const cleanedTabs = tabs.map(function (tab) {
+      return {
+        ...tab,
+        simulationState: null,
+        isSimulationRunning: false,
+      };
+    });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ tabs: cleanedTabs, activeTabId: activeTabId }));
+  } catch {
+    // localStorage plny nebo nedostupny — tichy fail
+  }
+}
 
 function AppContent() {
-  // react flow stav
-  const [nodes, setNodes, onNodesChange] = useNodesState(INITIAL_NODES);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(INITIAL_EDGES);
+  // ==================================
+  // TAB MANAGEMENT
+  // ==================================
+  // nacist taby z localStorage pokud existuji, jinak pouzit default
+  const [tabs, setTabs] = useState<TabData[]>(function () {
+    const saved = CACHED_STORAGE;
+    return saved ? saved.tabs : [INITIAL_TAB];
+  });
+  const [activeTabId, setActiveTabId] = useState(function () {
+    const saved = CACHED_STORAGE;
+    return saved ? saved.activeTabId : 'tab-1';
+  });
 
-  // stav simulace
-  const [selectedProtocol, setSelectedProtocol] = useState('RIP');
-  const [iteration, setIteration] = useState(0);
-  const [isConverged, setIsConverged] = useState(false);
+  // refy pro pristup k poslednim hodnotam bez stale closure
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  const activeTabIdRef = useRef(activeTabId);
+  activeTabIdRef.current = activeTabId;
+
+  // ulozit aktualni stav aktivniho tabu zpet do tabs pole
+  function saveActiveTabState() {
+    const currentActiveId = activeTabIdRef.current;
+    setTabs(function (currentTabs) {
+      return currentTabs.map(function (tab) {
+        if (tab.id === currentActiveId) {
+          return {
+            ...tab,
+            nodes: nodes,
+            edges: edges,
+            selectedProtocol: selectedProtocol,
+            iteration: iteration,
+            isConverged: isConverged,
+            isSimulationRunning: isSimulationRunning,
+            routingTables: routingTables,
+            currentChanges: currentChanges,
+            simulationState: simulationState,
+            selectedRouterId: selectedRouterId,
+            isPathMode: isPathMode,
+            pathSource: pathSource,
+            pathTarget: pathTarget,
+            ospfPhase: ospfPhase,
+            routerCounter: routerCounterRef.current,
+          };
+        }
+        return tab;
+      });
+    });
+  }
+
+  // nacist stav tabu do react stavu
+  function loadTabState(tab: TabData) {
+    setNodes(tab.nodes);
+    setEdges(tab.edges);
+    setSelectedProtocol(tab.selectedProtocol);
+    setIteration(tab.iteration);
+    setIsConverged(tab.isConverged);
+    setIsSimulationRunning(tab.isSimulationRunning);
+    setRoutingTables(tab.routingTables);
+    setCurrentChanges(tab.currentChanges);
+    setSimulationState(tab.simulationState);
+    setSelectedRouterId(tab.selectedRouterId);
+    setIsPathMode(tab.isPathMode);
+    setPathSource(tab.pathSource);
+    setPathTarget(tab.pathTarget);
+    setOspfPhase(tab.ospfPhase);
+    routerCounterRef.current = tab.routerCounter;
+    // resetovat simulacni engine — bude znovu inicializovan pri dalsim kroku
+    simulationRef.current = null;
+    // resetovat connecting mode
+    setConnectingFrom(null);
+    setSnapTarget(null);
+    setMousePosition(null);
+  }
+
+  // prepnout na jiny tab
+  function handleSwitchTab(tabId: string) {
+    if (tabId === activeTabIdRef.current) { return; }
+    // zastavit Run All pokud bezi
+    clearTimeout(runAllTimerRef.current);
+    runAllTimerRef.current = 0;
+    // ulozit aktualni stav
+    saveActiveTabState();
+    // nacist novy tab
+    const currentTabs = tabsRef.current;
+    const targetTab = currentTabs.find(function (t) { return t.id === tabId; });
+    if (targetTab) {
+      setActiveTabId(tabId);
+      loadTabState(targetTab);
+    }
+  }
+
+  // pridat novy tab
+  function handleAddTab() {
+    // ulozit aktualni tab
+    saveActiveTabState();
+    const existingNames = tabsRef.current.map(function (t) { return t.name; });
+    const newTab = createEmptyTab(existingNames);
+    setTabs(function (currentTabs) {
+      return [...currentTabs, newTab];
+    });
+    setActiveTabId(newTab.id);
+    loadTabState(newTab);
+  }
+
+  // zavrit tab — BEZ nested setState
+  function handleCloseTab(tabId: string) {
+    const currentTabs = tabsRef.current;
+    if (currentTabs.length <= 1) { return; }
+
+    // zastavit Run All pokud bezi
+    clearTimeout(runAllTimerRef.current);
+    runAllTimerRef.current = 0;
+
+    const tabIndex = currentTabs.findIndex(function (t) { return t.id === tabId; });
+    if (tabIndex === -1) { return; }
+
+    const newTabs = currentTabs.filter(function (t) { return t.id !== tabId; });
+
+    // pokud mazeme aktivni tab, prepnout na sousedni
+    if (tabId === activeTabIdRef.current) {
+      const newActiveIndex = Math.min(tabIndex, newTabs.length - 1);
+      const newActiveTab = newTabs[newActiveIndex];
+      setActiveTabId(newActiveTab.id);
+      loadTabState(newActiveTab);
+    }
+
+    setTabs(newTabs);
+  }
+
+  // prejmenovat tab
+  function handleRenameTab(tabId: string, newName: string) {
+    setTabs(function (currentTabs) {
+      return currentTabs.map(function (tab) {
+        if (tab.id === tabId) {
+          return { ...tab, name: newName };
+        }
+        return tab;
+      });
+    });
+  }
+
+  // zmenit poradi tabu (drag & drop)
+  function handleReorderTabs(fromIndex: number, toIndex: number) {
+    setTabs(function (currentTabs) {
+      var newTabs = [...currentTabs];
+      var moved = newTabs.splice(fromIndex, 1)[0];
+      newTabs.splice(toIndex, 0, moved);
+      return newTabs;
+    });
+  }
+
+  // tab info pro TabBar komponentu
+  const tabInfos: TabInfo[] = tabs.map(function (tab) {
+    return { id: tab.id, name: tab.name };
+  });
+
+  // react flow stav — inicializovat z ulozeneho tabu pokud existuje
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(function () {
+    const saved = CACHED_STORAGE;
+    if (saved) {
+      const activeTab = saved.tabs.find(function (t) { return t.id === saved.activeTabId; });
+      if (activeTab) { return activeTab.nodes; }
+    }
+    return [];
+  } as any);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(function () {
+    const saved = CACHED_STORAGE;
+    if (saved) {
+      const activeTab = saved.tabs.find(function (t) { return t.id === saved.activeTabId; });
+      if (activeTab) { return activeTab.edges; }
+    }
+    return [];
+  } as any);
+
+  // stav simulace — inicializovat z ulozeneho tabu
+  const initialSaved = CACHED_STORAGE;
+  const initialActiveTab = initialSaved ? initialSaved.tabs.find(function (t) { return t.id === initialSaved.activeTabId; }) : null;
+  const [selectedProtocol, setSelectedProtocol] = useState(initialActiveTab ? initialActiveTab.selectedProtocol : 'RIP');
+  const [iteration, setIteration] = useState(initialActiveTab ? initialActiveTab.iteration : 0);
+  const [isConverged, setIsConverged] = useState(initialActiveTab ? initialActiveTab.isConverged : false);
   const [isSimulationRunning, setIsSimulationRunning] = useState(false);
-  const [routingTables, setRoutingTables] = useState<Record<string, RoutingEntry[]>>({});
-  const [currentChanges, setCurrentChanges] = useState<Change[]>([]);
+  const [routingTables, setRoutingTables] = useState<Record<string, RoutingEntry[]>>(initialActiveTab ? initialActiveTab.routingTables : {});
+  const [currentChanges, setCurrentChanges] = useState<Change[]>(initialActiveTab ? initialActiveTab.currentChanges : []);
   const [simulationState, setSimulationState] = useState<NetworkState | null>(null);
 
   // pocitadlo pro particle animace na edgech
@@ -228,7 +396,7 @@ function AppContent() {
   }
 
   // stav editoru
-  const [selectedRouterId, setSelectedRouterId] = useState<string | null>(null);
+  const [selectedRouterId, setSelectedRouterId] = useState<string | null>(initialActiveTab ? initialActiveTab.selectedRouterId : null);
   const [isPathMode, setIsPathMode] = useState(false);
   const [pathSource, setPathSource] = useState<string | null>(null);
   const [pathTarget, setPathTarget] = useState<string | null>(null);
@@ -309,6 +477,20 @@ function AppContent() {
   // ref pro zastaveni Run All smycky
   const runAllTimerRef = useRef<number>(0);
 
+  // pocitadlo pro generovani unikatnich router ID — per-tab, ulozeno v TabData
+  const routerCounterRef = useRef<number>(initialActiveTab ? initialActiveTab.routerCounter : 1);
+
+  // ziskani protokolu podle nazvu
+  function getProtocol(name: string): Protocol {
+    if (name === 'OSPF') {
+      return OSPFProtocol;
+    }
+    if (name === 'EIGRP') {
+      return EIGRPProtocol;
+    }
+    return RIPProtocol;
+  }
+
   // prevod react flow nodu na RouterNode pro sidebar
   function getRouters(): RouterNodeType[] {
     return nodes.map(function (node) {
@@ -342,8 +524,8 @@ function AppContent() {
 
   // pridat novy router na pozici (z drag & drop)
   function handleAddRouter(position: { x: number; y: number }) {
-    const newId = 'r' + routerCounter;
-    routerCounter = routerCounter + 1;
+    const newId = 'r' + routerCounterRef.current;
+    routerCounterRef.current = routerCounterRef.current + 1;
 
     const letterIndex = nodes.length;
     const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -703,7 +885,38 @@ function AppContent() {
   }
 
   // aktualni faze OSPF pro vizualizaci
-  const [ospfPhase, setOspfPhase] = useState<string>('');
+  const [ospfPhase, setOspfPhase] = useState<string>(initialActiveTab ? initialActiveTab.ospfPhase : '');
+
+  // auto-save do localStorage pri zmene stavu (debounced)
+  useEffect(function () {
+    var timer = setTimeout(function () {
+      // sestavit aktualni snapshot tabu s live daty aktivniho tabu
+      const currentActiveId = activeTabIdRef.current;
+      const updatedTabs = tabsRef.current.map(function (tab) {
+        if (tab.id === currentActiveId) {
+          return {
+            ...tab,
+            nodes: nodes,
+            edges: edges,
+            selectedProtocol: selectedProtocol,
+            iteration: iteration,
+            isConverged: isConverged,
+            routingTables: routingTables,
+            currentChanges: currentChanges,
+            selectedRouterId: selectedRouterId,
+            isPathMode: isPathMode,
+            pathSource: pathSource,
+            pathTarget: pathTarget,
+            ospfPhase: ospfPhase,
+            routerCounter: routerCounterRef.current,
+          };
+        }
+        return tab;
+      });
+      saveTabsToStorage(updatedTabs, currentActiveId);
+    }, 200);
+    return function () { clearTimeout(timer); };
+  }, [tabs, activeTabId, nodes, edges, selectedProtocol, iteration, isConverged, routingTables, currentChanges, selectedRouterId, isPathMode, pathSource, pathTarget, ospfPhase]);
 
   function handleStep() {
     let engine = simulationRef.current;
@@ -1500,7 +1713,7 @@ function AppContent() {
           if (num > maxNum) { maxNum = num; }
         }
       });
-      routerCounter = maxNum + 1;
+      routerCounterRef.current = maxNum + 1;
 
       // nastavit nový stav
       setNodes(newNodes);
@@ -1555,7 +1768,7 @@ function AppContent() {
         if (num > maxNum) { maxNum = num; }
       }
     });
-    routerCounter = maxNum + 1;
+    routerCounterRef.current = maxNum + 1;
 
     setNodes(newNodes);
     setEdges(newEdges);
@@ -1624,6 +1837,16 @@ function AppContent() {
           allChanges={currentChanges}
         />
 
+        <div className="canvas-column">
+        <TabBar
+          tabs={tabInfos}
+          activeTabId={activeTabId}
+          onSwitchTab={handleSwitchTab}
+          onAddTab={handleAddTab}
+          onCloseTab={handleCloseTab}
+          onRenameTab={handleRenameTab}
+          onReorderTabs={handleReorderTabs}
+        />
         <div
           className={canvasClass}
           onMouseMove={function handleMouseMove(e) {
@@ -1767,6 +1990,7 @@ function AppContent() {
               />
             }
           />
+        </div>
         </div>
       </div>
 
