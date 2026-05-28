@@ -131,7 +131,7 @@ export function Canvas({
         type: 'network',
         animated: false,
       }}
-      fitView
+      defaultViewport={{ x: 0, y: 0, zoom: 1.5 }}
       snapToGrid={snapToGrid}
       snapGrid={[20, 20]}
       connectionLineStyle={{

@@ -1,6 +1,4 @@
 // toolbar — horni lista s nazvem aplikace a tlacitky nastaveni + topologie
-// editacni nastroje (pridat router, propojit) byly presunuty
-// do sidebaru (drag) a kontextoveho menu (pravy klik)
 
 import { RouterIcon, SettingsIcon, MapIcon } from './Icons';
 
