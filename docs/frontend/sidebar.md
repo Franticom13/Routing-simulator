@@ -3,6 +3,11 @@
 Levy panel aplikace (`src/components/Sidebar.tsx`). Zobrazuje seznam routeru,
 routovaci tabulku vybraneho routeru, informace o vizualizaci cesty a stav simulace.
 
+> **Multi-tab:** Obsah sidebaru vzdy odpovida aktivnimu tabu. Pri prepnuti tabu
+> se automaticky aktualizuje seznam routeru, routovaci tabulka, stav simulace
+> i rezim vizualizace cesty -- sidebar dostava data z `App.tsx`, ktery pri
+> prepnuti tabu nacte odpovidajici stav pomoci `loadTabState()`.
+
 ---
 
 ## Struktura panelu

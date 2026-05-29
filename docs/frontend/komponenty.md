@@ -8,9 +8,10 @@ Kompletni seznam vsech komponent v aplikaci, jejich zodpovednosti a props.
 
 ### App (`src/App.tsx`)
 
-Centralni orchestrator cele aplikace. Drzi veskerý stav a propojuje frontend s core logikou.
+Centralni orchestrator cele aplikace. Drzi veskery stav a propojuje frontend s core logikou.
+Spravuje multi-tab system -- kazdy tab (`TabData`) ma vlastni izolovanou sadu stavu.
 
-**Stav:**
+**Stav (per-tab -- ulozeno v `TabData`):**
 
 | Stav | Typ | Ucel |
 |------|-----|------|
@@ -21,15 +22,53 @@ Centralni orchestrator cele aplikace. Drzi veskerý stav a propojuje frontend s 
 | `isSimulationRunning` | `boolean` | Zda bezi automaticky rezim |
 | `routingTables` | `Record<string, RoutingEntry[]>` | Vsechny routovaci tabulky |
 | `currentChanges` | `Change[]` | Zmeny v poslednim kroku |
+| `simulationState` | `NetworkState \| null` | Interni stav simulace |
 | `selectedRouterId` | `string \| null` | ID vybraneho routeru |
-| `isConnecting` | `boolean` | Rezim propojovani |
 | `isPathMode` | `boolean` | Rezim vizualizace cesty |
 | `pathSource` / `pathTarget` | `string \| null` | Zdroj a cil cesty |
+| `ospfPhase` | `string` | Aktualni faze OSPF simulace |
+| `routerCounter` | `number` | Pocitadlo pro generovani unikatnich router ID |
+
+**Stav (tab management):**
+
+| Stav | Typ | Ucel |
+|------|-----|------|
+| `tabs` | `TabData[]` | Pole vsech tabu s jejich snapshoty stavu |
+| `activeTabId` | `string` | ID aktualne aktivniho tabu |
+| `tabsRef` | `Ref<TabData[]>` | Ref pro pristup k poslednim hodnotam bez stale closure |
+| `activeTabIdRef` | `Ref<string>` | Ref pro pristup k poslednimu activeTabId |
+
+**Stav (ostatni):**
+
+| Stav | Typ | Ucel |
+|------|-----|------|
+| `isConnecting` | `boolean` | Rezim propojovani |
 | `highlightedPath` | `string[]` | Zvyraznena cesta |
 | `metricDialog` | objekt | Stav modalu pro metriku |
 | `simulationRef` | `Ref<SimulationEngine>` | Reference na engine |
 
-**Klicove metody:** `handleAddRouter`, `handleToggleConnect`, `handleTogglePath`, `handleStep`, `handleRunAll`, `handleReset`, `handleProtocolChange`, `findAndHighlightPath`
+**Tab management metody:**
+
+| Metoda | Popis |
+|--------|-------|
+| `handleSwitchTab(tabId)` | Ulozi aktualni tab (`saveActiveTabState`), nacte cilovy tab (`loadTabState`) |
+| `handleAddTab()` | Vytvori prazdny tab (`createEmptyTab`), prida ho a prepne na nej |
+| `handleCloseTab(tabId)` | Zavre tab, prepne na sousedni pokud se maze aktivni |
+| `handleRenameTab(tabId, newName)` | Prejmenuje tab v poli `tabs` |
+| `handleReorderTabs(fromIndex, toIndex)` | Presune tab na novou pozici (drag & drop) |
+| `saveActiveTabState()` | Ulozi aktualni React stav zpet do `tabs` pole |
+| `loadTabState(tab)` | Nacte stav z `TabData` do vsech React useState setteru |
+
+**localStorage persistence:**
+
+| Entita | Popis |
+|--------|-------|
+| `STORAGE_KEY` | Klic `'routing-simulator-tabs'` v localStorage |
+| `CACHED_STORAGE` | Jednorazove nacteni z localStorage pri startu (volano mimo komponentu) |
+| `saveTabsToStorage(tabs, activeTabId)` | Serializuje taby do JSON, odstrani `simulationState` pred ulozenim |
+| Auto-save `useEffect` | Debounced (200ms) -- sleduje zmeny nodes, edges, iteration, atd. a automaticky uklada |
+
+**Klicove metody (editace/simulace):** `handleAddRouter`, `handleToggleConnect`, `handleTogglePath`, `handleStep`, `handleRunAll`, `handleReset`, `handleProtocolChange`, `findAndHighlightPath`
 
 ---
 
@@ -77,6 +116,58 @@ Custom React Flow edge s floating pripojenim. Zobrazuje primku s metrikou.
 | `particleKey` | `number` | Monotónní identifikátor aktuální dávky animovaných pilulek |
 | `particleTarget` | `string` | ID cílového routeru pro pohybující se pilulky na této lince |
 | `particlePills` | `Array<string \| object>` | Seznam zpráv/záznamů k animaci (putují po lince v podobě pilulek) |
+
+---
+
+## TabBar (`src/components/TabBar.tsx`)
+
+Horizontalni lista tabu umistena nad platnem (Canvas), napravo od sidebaru. Kazdy tab predstavuje nezavisly workspace s vlastnim grafem a simulaci.
+
+### Props
+
+```typescript
+interface TabBarProps {
+  tabs: TabInfo[];                                        // pole tabu (id, name)
+  activeTabId: string;                                    // ID aktivniho tabu
+  onSwitchTab: (tabId: string) => void;                   // prepnuti na tab
+  onAddTab: () => void;                                   // pridani noveho tabu
+  onCloseTab: (tabId: string) => void;                    // zavreni tabu
+  onRenameTab: (tabId: string, newName: string) => void;  // prejmenovani tabu
+  onReorderTabs: (fromIndex: number, toIndex: number) => void; // zmena poradi (drag)
+}
+```
+
+### TabInfo
+
+```typescript
+export interface TabInfo {
+  id: string;    // unikatni identifikator tabu
+  name: string;  // zobrazovany nazev tabu
+}
+```
+
+### Funkcionalita
+
+| Funkce | Popis |
+|--------|-------|
+| **Prepinani** | Klik na tab zavola `onSwitchTab`, aktivni tab ma tridu `.tab-item.active` |
+| **Pridani** | Tlacitko `+` na konci listy zavola `onAddTab` |
+| **Zavreni** | Krizek (`CloseIcon`) na kazdem tabu -- zobrazen jen pokud existuje vice nez 1 tab |
+| **Prejmenovani** | Pravy klik -> context menu -> Prejmenovat -> inline `<input>` s automatickou sirkou |
+| **Drag & Drop** | Kazdy tab je `draggable`, pri pretazeni nad jiny tab se okamzite vola `onReorderTabs` |
+| **Sliding indicator** | Animovany spodni prouzek (`.tab-indicator`) plynule sleduje aktivni tab pomoci `useLayoutEffect` + `ResizeObserver` |
+
+### Context menu
+
+Pravy klik na tab otvira kontextove menu (`position: fixed`) s polozkami:
+- **Prejmenovat** -- spusti inline editaci nazvu
+- **Zavrit tab** -- zobrazen jen pokud existuje vice nez 1 tab (trida `.danger`)
+
+Menu se zavre pri kliknuti mimo (listener na `mousedown`).
+
+### Inline editace nazvu
+
+Pri prejmenovani se nazev tabu nahradi elementem `<input>`. Sirka inputu se dynamicky meri pomoci skryteho `<span>` (`.tab-measure`). Potvrzeni: Enter nebo blur. Zruseni: Escape.
 
 ---
 

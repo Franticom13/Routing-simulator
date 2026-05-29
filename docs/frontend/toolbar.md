@@ -12,14 +12,25 @@ Soubor: `src/components/Toolbar.tsx`
 
 ### Rozlozeni
 
+Toolbar zabira celou sirku aplikace. Pod nim, napravo od sidebaru, je **TabBar** -- samostatna komponenta pro spravu tabu.
+
 ```
-┌──────────────────────────────────────────────────────────┐
-│ 🖧 Routing Simulator              [Topologie] [Nastavení]│
-└──────────────────────────────────────────────────────────┘
++---------------------------------------------------------+
+| Routing Simulator              [Topologie] [Nastaveni]  |  <- Toolbar (cela sirka)
++-----------+---------------------------------------------+
+|           | [Tab 1] [Tab 2] [+]                         |  <- TabBar (jen nad canvas)
+|  Sidebar  |                                             |
+|           |                Canvas                       |
+|           |                                             |
++-----------+---------------------------------------------+
 ```
 
+Tlacitko **Topologie** je v Toolbaru (vedle Nastaveni), nikoliv v TabBaru.
+
 - **Levy blok:** Logo (RouterIcon) + nazev aplikace (`.toolbar-title`), `margin-right: auto` (odtlaci zbytek doprava)
-- **Pravy blok:** Tlacitka Topologie a Nastavení
+- **Pravy blok:** Tlacitka Topologie a Nastaveni
+
+Canvas je obalen v `.canvas-column` (flex column), ktery obsahuje TabBar navrchu a samotne platno pod nim.
 
 ### Props
 

@@ -82,8 +82,10 @@ function createEmptyTab(existingNames: string[]): TabData {
   while (existingNames.indexOf('Tab ' + num) !== -1) {
     num = num + 1;
   }
+  // pouzit timestamp + counter pro zarucenou unikatnost
+  var uniqueId = 'tab-' + Date.now() + '-' + tabIdCounter;
   return {
-    id: 'tab-' + tabIdCounter,
+    id: uniqueId,
     name: 'Tab ' + num,
     nodes: [],
     edges: [],
@@ -335,7 +337,7 @@ function AppContent() {
   });
 
   // react flow stav — inicializovat z ulozeneho tabu pokud existuje
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(function () {
+  const [nodes, setNodes, onNodesChangeBase] = useNodesState<Node>(function () {
     const saved = CACHED_STORAGE;
     if (saved) {
       const activeTab = saved.tabs.find(function (t) { return t.id === saved.activeTabId; });
@@ -343,7 +345,7 @@ function AppContent() {
     }
     return [];
   } as any);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(function () {
+  const [edges, setEdges, onEdgesChangeBase] = useEdgesState<Edge>(function () {
     const saved = CACHED_STORAGE;
     if (saved) {
       const activeTab = saved.tabs.find(function (t) { return t.id === saved.activeTabId; });
@@ -351,6 +353,184 @@ function AppContent() {
     }
     return [];
   } as any);
+
+  // sledovani multi-selekce — aktualizovat REF pri kazdem renderovani
+  // kdyz je > 1 node selected, ulozit jejich IDs
+  // kdyz React Flow pri pravem kliku deselektuje, ref stale drzi posledni multi-selekci
+  const lastMultiSelectionRef = useRef<{ nodeIds: string[]; time: number }>({ nodeIds: [], time: 0 });
+  var currentlySelected = nodes.filter(function (n) { return n.selected; });
+  if (currentlySelected.length > 1) {
+    lastMultiSelectionRef.current = {
+      nodeIds: currentlySelected.map(function (n) { return n.id; }),
+      time: Date.now(),
+    };
+  }
+
+  // ref pro sledovani casu posledniho praveho kliku
+  // pouziva se k zabraneni deselekce multi-selekce pri pravem kliku
+  // DULEZITE: pouzit timestamp misto boolean, protoze na trackpadu
+  // pointerdown+pointerup se spousti okamzite (tap), takze boolean by uz byl false
+  // nez React zavola onNodesChange
+  const lastRightClickTimeRef = useRef(0);
+
+  useEffect(function trackRightClick() {
+    function onPointerDown(e: PointerEvent) {
+      if (e.button === 2) {
+        lastRightClickTimeRef.current = Date.now();
+      }
+    }
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return function () {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+    };
+  }, []);
+
+  // wrappovany onNodesChange — pri pravem kliku s multi-selekci blokovat deselekci
+  var onNodesChange = useCallback(function (changes: any[]) {
+    // logovat selection changes
+
+    // pokud byl pravy klik nedavno (< 500ms) a mame multi-selekci,
+    // odfiltrovat selection changes ktere by deselektovaly nody
+    var timeSinceClick = Date.now() - lastRightClickTimeRef.current;
+    if (timeSinceClick < 500 && lastMultiSelectionRef.current.nodeIds.length > 1) {
+      var hasSelectionChanges = changes.some(function (c: any) { return c.type === 'select'; });
+      if (hasSelectionChanges) {
+
+        // odfiltrovat vsechny selection changes — nechat zbytek (position, dimensions, etc.)
+        var filtered = changes.filter(function (c: any) { return c.type !== 'select'; });
+        if (filtered.length > 0) {
+          onNodesChangeBase(filtered);
+        }
+        return;
+      }
+    }
+    onNodesChangeBase(changes);
+  }, [onNodesChangeBase]);
+
+  // wrappovany onEdgesChange — pri pravem kliku s multi-selekci blokovat deselekci hran
+  var onEdgesChange = useCallback(function (changes: any[]) {
+    var timeSinceClick = Date.now() - lastRightClickTimeRef.current;
+    if (timeSinceClick < 500 && lastMultiSelectionRef.current.nodeIds.length > 1) {
+      var hasSelectionChanges = changes.some(function (c: any) { return c.type === 'select'; });
+      if (hasSelectionChanges) {
+        var filtered = changes.filter(function (c: any) { return c.type !== 'select'; });
+        if (filtered.length > 0) {
+          onEdgesChangeBase(filtered);
+        }
+        return;
+      }
+    }
+    onEdgesChangeBase(changes);
+  }, [onEdgesChangeBase]);
+
+  // synchronizovat selekci hran s selekci nodu
+  // hrana je selected jen kdyz OBA koncove nody jsou selected
+  useEffect(function syncEdgeSelection() {
+    var selectedNodeIds = new Set(
+      nodes.filter(function (n) { return n.selected; }).map(function (n) { return n.id; })
+    );
+    // pokud zadny node neni selected, neni co synchronizovat
+    if (selectedNodeIds.size === 0) { return; }
+
+    var needsUpdate = false;
+    var edgeChanges: any[] = [];
+    edges.forEach(function (edge) {
+      var shouldBeSelected = selectedNodeIds.has(edge.source) && selectedNodeIds.has(edge.target);
+      if (edge.selected !== shouldBeSelected) {
+        needsUpdate = true;
+        edgeChanges.push({
+          type: 'select' as const,
+          id: edge.id,
+          selected: shouldBeSelected,
+        });
+      }
+    });
+    if (needsUpdate) {
+      onEdgesChangeBase(edgeChanges);
+    }
+  }, [nodes.filter(function (n) { return n.selected; }).map(function (n) { return n.id; }).join(',')]);
+
+  // === UNDO/REDO SYSTEM ===
+  const MAX_HISTORY = 50;
+  const historyRef = useRef<{ nodes: Node[]; edges: Edge[] }[]>([]);
+  const futureRef = useRef<{ nodes: Node[]; edges: Edge[] }[]>([]);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const isUndoRedoRef = useRef(false); // flag aby auto-push neulozil stav pri undo/redo
+
+  // ulozit aktualni stav do historie (volat PRED zmenou)
+  function pushHistory() {
+    historyRef.current.push({
+      nodes: JSON.parse(JSON.stringify(nodes)),
+      edges: JSON.parse(JSON.stringify(edges)),
+    });
+    if (historyRef.current.length > MAX_HISTORY) {
+      historyRef.current.shift();
+    }
+    // pri novem kroku vymazat redo
+    futureRef.current = [];
+    setCanUndo(true);
+    setCanRedo(false);
+  }
+
+  function handleUndo() {
+    if (historyRef.current.length === 0) { return; }
+    isUndoRedoRef.current = true;
+    // ulozit aktualni stav do future
+    futureRef.current.push({
+      nodes: JSON.parse(JSON.stringify(nodes)),
+      edges: JSON.parse(JSON.stringify(edges)),
+    });
+    // obnovit posledni stav z historie
+    var prev = historyRef.current.pop()!;
+    setNodes(prev.nodes);
+    setEdges(prev.edges);
+    setCanUndo(historyRef.current.length > 0);
+    setCanRedo(true);
+    // reset flag po renderovani
+    setTimeout(function () { isUndoRedoRef.current = false; }, 0);
+  }
+
+  function handleRedo() {
+    if (futureRef.current.length === 0) { return; }
+    isUndoRedoRef.current = true;
+    // ulozit aktualni stav do historie
+    historyRef.current.push({
+      nodes: JSON.parse(JSON.stringify(nodes)),
+      edges: JSON.parse(JSON.stringify(edges)),
+    });
+    // obnovit stav z future
+    var next = futureRef.current.pop()!;
+    setNodes(next.nodes);
+    setEdges(next.edges);
+    setCanUndo(true);
+    setCanRedo(futureRef.current.length > 0);
+    // reset flag po renderovani
+    setTimeout(function () { isUndoRedoRef.current = false; }, 0);
+  }
+
+  // Ctrl+Z / Ctrl+Shift+Z klavesove zkratky
+  useEffect(function () {
+    function handleKeyDown(e: KeyboardEvent) {
+      var tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') { return; }
+
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'Z' || (e.key === 'z' && e.shiftKey)) ) {
+        e.preventDefault();
+        handleRedo();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+        e.preventDefault();
+        handleRedo();
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return function () { document.removeEventListener('keydown', handleKeyDown); };
+  });
 
   // stav simulace — inicializovat z ulozeneho tabu
   const initialSaved = CACHED_STORAGE;
@@ -434,6 +614,22 @@ function AppContent() {
     routerId: '',
     routerLabel: '',
   });
+
+  // group context menu stav (pro hromadny vyber)
+  const [groupContextMenu, setGroupContextMenu] = useState<{
+    isOpen: boolean;
+    x: number;
+    y: number;
+    nodeIds: string[];
+  }>({
+    isOpen: false,
+    x: 0,
+    y: 0,
+    nodeIds: [],
+  });
+
+  // mod hromadneho propojovani — pole zdrojovych nodu cekajicich na cilovy router
+  const [bulkConnectFrom, setBulkConnectFrom] = useState<string[] | null>(null);
 
   // metric dialog stav — edgeId je vyplnene pri editaci existujici hrany
   const [metricDialog, setMetricDialog] = useState<{
@@ -524,6 +720,7 @@ function AppContent() {
 
   // pridat novy router na pozici (z drag & drop)
   function handleAddRouter(position: { x: number; y: number }) {
+    pushHistory();
     const newId = 'r' + routerCounterRef.current;
     routerCounterRef.current = routerCounterRef.current + 1;
 
@@ -545,6 +742,7 @@ function AppContent() {
 
   // smazat router a vsechny jeho hrany
   function handleDeleteRouter(routerId: string) {
+    pushHistory();
     setNodes(function (currentNodes) {
       return currentNodes.filter(function (node) {
         return node.id !== routerId;
@@ -565,6 +763,33 @@ function AppContent() {
     setContextMenu(function (prev) {
       return { ...prev, isOpen: false };
     });
+  }
+
+  // smazat vice routeru a hran najednou (hromadny vyber)
+  function handleDeleteSelected(nodeIds: string[], edgeIds: string[]) {
+    pushHistory();
+    var nodeIdSet = new Set(nodeIds);
+    var edgeIdSet = new Set(edgeIds);
+
+    setNodes(function (currentNodes) {
+      return currentNodes.filter(function (node) {
+        return !nodeIdSet.has(node.id);
+      });
+    });
+
+    setEdges(function (currentEdges) {
+      return currentEdges.filter(function (edge) {
+        // smazat explicitne vybrane edgy i edgy napojene na smazane nody
+        if (edgeIdSet.has(edge.id)) { return false; }
+        if (nodeIdSet.has(edge.source) || nodeIdSet.has(edge.target)) { return false; }
+        return true;
+      });
+    });
+
+    // pokud smazany router byl vybrany, zrusit vyber
+    if (selectedRouterId !== null && nodeIdSet.has(selectedRouterId)) {
+      setSelectedRouterId(null);
+    }
   }
 
   // otevrit rename dialog
@@ -588,6 +813,7 @@ function AppContent() {
 
   // potvrzeni prejmenování
   function handleRenameConfirm(newName: string) {
+    pushHistory();
     setNodes(function (currentNodes) {
       return currentNodes.map(function (n) {
         if (n.id === renameDialog.routerId) {
@@ -684,6 +910,7 @@ function AppContent() {
 
   // potvrzeni metriky v dialogu — nova hrana nebo editace existujici
   function handleMetricConfirm(metric: number) {
+    pushHistory();
     if (metricDialog.edgeId) {
       // editace existujici hrany
       setEdges(function (currentEdges) {
@@ -760,15 +987,73 @@ function AppContent() {
 
   // smazani hrany z edge context menu
   function handleEdgeDelete() {
+    pushHistory();
     setEdges(function (currentEdges) {
       return currentEdges.filter(function (e) { return e.id !== edgeContextMenu.edgeId; });
     });
     setEdgeContextMenu(function (prev) { return { ...prev, isOpen: false }; });
   }
 
-  // pravy klik na node — otevre context menu
+  // pravy klik na node — otevre context menu (single nebo group)
   function handleNodeContextMenu(event: React.MouseEvent, node: Node) {
     event.preventDefault();
+
+    // VARIANTA A: selekce je stale aktivni v React stavu
+    var selectedNodes = nodes.filter(function (n) { return n.selected; });
+
+    if (selectedNodes.length > 1 && node.selected) {
+
+      setGroupContextMenu({
+        isOpen: true,
+        x: event.clientX,
+        y: event.clientY,
+        nodeIds: selectedNodes.map(function (n) { return n.id; }),
+      });
+      return;
+    }
+
+    // VARIANTA B: pouzit ulozenou multi-selekci z refu (cas < 3s)
+    var last = lastMultiSelectionRef.current;
+    var now = Date.now();
+
+    if (last.nodeIds.length > 1 && now - last.time < 3000) {
+      var wasInSelection = last.nodeIds.indexOf(node.id) !== -1;
+      if (wasInSelection) {
+
+        setGroupContextMenu({
+          isOpen: true,
+          x: event.clientX,
+          y: event.clientY,
+          nodeIds: last.nodeIds,
+        });
+        lastMultiSelectionRef.current = { nodeIds: [], time: 0 };
+        return;
+      }
+    }
+
+    // VARIANTA C: cteni primo z DOM — fallback kdyz React stav neni aktualni
+    var domSelectedNodes = document.querySelectorAll('.react-flow__node.selected');
+
+    if (domSelectedNodes.length > 1) {
+      var domNodeIds: string[] = [];
+      domSelectedNodes.forEach(function (el) {
+        var id = el.getAttribute('data-id');
+        if (id) { domNodeIds.push(id); }
+      });
+      if (domNodeIds.length > 1 && domNodeIds.indexOf(node.id) !== -1) {
+
+        setGroupContextMenu({
+          isOpen: true,
+          x: event.clientX,
+          y: event.clientY,
+          nodeIds: domNodeIds,
+        });
+        return;
+      }
+    }
+
+
+    // jinak standardni single-router context menu
     setContextMenu({
       isOpen: true,
       x: event.clientX,
@@ -778,6 +1063,30 @@ function AppContent() {
     });
   }
 
+  // pravy klik na NodesSelection overlay (React Flow zobrazi overlay pres vybrane nody)
+  // toto se vola misto onNodeContextMenu kdyz je vice nodu vybrano pres React Flow selekci
+  function handleSelectionContextMenu(event: React.MouseEvent, selectedNodes: Node[]) {
+    event.preventDefault();
+
+    if (selectedNodes.length > 1) {
+      setGroupContextMenu({
+        isOpen: true,
+        x: event.clientX,
+        y: event.clientY,
+        nodeIds: selectedNodes.map(function (n) { return n.id; }),
+      });
+    } else if (selectedNodes.length === 1) {
+      // jen 1 node vybran — otevrit standardni context menu
+      setContextMenu({
+        isOpen: true,
+        x: event.clientX,
+        y: event.clientY,
+        routerId: selectedNodes[0].id,
+        routerLabel: (selectedNodes[0].data as any).label || 'Router',
+      });
+    }
+  }
+
   // zavreni context menu
   function handleContextMenuClose() {
     setContextMenu(function (prev) {
@@ -785,8 +1094,96 @@ function AppContent() {
     });
   }
 
+  // zavreni group context menu
+  function handleGroupContextMenuClose() {
+    setGroupContextMenu(function (prev) { return { ...prev, isOpen: false }; });
+  }
+
+  // group context menu — smazat vybrane
+  function handleGroupDelete() {
+    var ids = groupContextMenu.nodeIds;
+    handleDeleteSelected(ids, []);
+    setGroupContextMenu(function (prev) { return { ...prev, isOpen: false }; });
+    // zrusit selekci
+    setNodes(function (cn) {
+      return cn.map(function (n) { return { ...n, selected: false }; });
+    });
+  }
+
+  // group context menu — propojit vybrane s cilem
+  function handleGroupConnect() {
+    var ids = groupContextMenu.nodeIds;
+    setGroupContextMenu(function (prev) { return { ...prev, isOpen: false }; });
+
+    // oznacit routery ktere uz jsou propojene se VSEMI vybranymi routery
+    // (= uz neni co propojovat)
+    var sourceSet = new Set(ids);
+    setNodes(function (currentNodes) {
+      return currentNodes.map(function (node) {
+        if (sourceSet.has(node.id)) {
+          // zdrojovy node sam — oznacit jako connected
+          return { ...node, data: { ...node.data, isAlreadyConnected: true } };
+        }
+        // zjistit kolik zdrojovych nodu je uz propojeno s timto nodem
+        var connectedCount = 0;
+        ids.forEach(function (srcId) {
+          var exists = edges.some(function (e) {
+            return (e.source === srcId && e.target === node.id) ||
+                   (e.source === node.id && e.target === srcId);
+          });
+          if (exists) { connectedCount++; }
+        });
+        // pokud vsechny zdrojove nody uz jsou propojene, oznacit
+        return { ...node, data: { ...node.data, isAlreadyConnected: connectedCount >= ids.length } };
+      });
+    });
+
+    setBulkConnectFrom(ids);
+  }
+
+  // provest hromadne propojeni — cilovy router klikneme
+  function handleBulkConnectTarget(targetId: string) {
+    if (!bulkConnectFrom) { return; }
+    pushHistory();
+
+    var newEdges: Edge[] = [];
+    bulkConnectFrom.forEach(function (sourceId) {
+      if (sourceId === targetId) { return; }
+      // kontrola duplicity
+      var exists = edges.some(function (e) {
+        return (e.source === sourceId && e.target === targetId) ||
+               (e.source === targetId && e.target === sourceId);
+      });
+      if (!exists) {
+        newEdges.push({
+          id: 'e-' + sourceId + '-' + targetId,
+          source: sourceId,
+          target: targetId,
+          type: 'network',
+          data: { metric: 1 },
+        });
+      }
+    });
+
+    if (newEdges.length > 0) {
+      setEdges(function (ce) { return [...ce, ...newEdges]; });
+    }
+
+    setBulkConnectFrom(null);
+    // zrusit selekci
+    setNodes(function (cn) {
+      return cn.map(function (n) { return { ...n, selected: false }; });
+    });
+  }
+
   // kliknuti na node
   function handleNodeClick(_event: React.MouseEvent, node: Node) {
+    // pokud jsme v bulk connect modu, propojit vsechny vybrane s cilem
+    if (bulkConnectFrom !== null) {
+      handleBulkConnectTarget(node.id);
+      return;
+    }
+
     // pokud jsme v connecting mode, propojit
     if (connectingFrom !== null && connectingFrom !== node.id) {
       // kontrola duplicitniho propojeni
@@ -843,16 +1240,41 @@ function AppContent() {
   }
 
   // kliknuti na prazdne platno
-  function handlePaneClick() {
+  // zrusit connecting mode (single i bulk)
+  function cancelConnectMode() {
+    if (bulkConnectFrom !== null) {
+      setBulkConnectFrom(null);
+    }
     if (connectingFrom !== null) {
       setConnectingFrom(null);
-      setSnapTarget(null);
-      setMousePosition(null);
-      setNodes(function (cn) {
-        return cn.map(function (n) {
-          return { ...n, data: { ...n.data, isAlreadyConnected: false } };
-        });
+    }
+    setSnapTarget(null);
+    setMousePosition(null);
+    setNodes(function (cn) {
+      return cn.map(function (n) {
+        return { ...n, data: { ...n.data, isAlreadyConnected: false } };
       });
+    });
+  }
+
+  // Escape klavesa — zrusit connecting mode
+  useEffect(function escapeHandler() {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        if (bulkConnectFrom !== null || connectingFrom !== null) {
+          e.preventDefault();
+          cancelConnectMode();
+        }
+      }
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return function () { document.removeEventListener('keydown', onKeyDown); };
+  }, [bulkConnectFrom, connectingFrom]);
+
+  function handlePaneClick() {
+    // zrusit connecting mod (bulk i single)
+    if (bulkConnectFrom !== null || connectingFrom !== null) {
+      cancelConnectMode();
       return;
     }
     if (!isPathMode) {
@@ -862,6 +1284,24 @@ function AppContent() {
     if (isConverged) {
       clearNodeHighlights();
     }
+    // zrusit hromadny vyber
+    setNodes(function (cn) {
+      return cn.map(function (n) {
+        if (n.selected) { return { ...n, selected: false }; }
+        return n;
+      });
+    });
+    setEdges(function (ce) {
+      return ce.map(function (e) {
+        if (e.selected) { return { ...e, selected: false }; }
+        return e;
+      });
+    });
+  }
+
+  // pred pretazenim nodu — ulozit stav pro undo
+  function handleNodeDragStart() {
+    pushHistory();
   }
 
   // po pretazeni nodu
@@ -1632,7 +2072,7 @@ function AppContent() {
     : [];
 
   // css trida pro connecting mode
-  const canvasClass = connectingFrom !== null ? 'canvas-wrapper connecting-mode' : 'canvas-wrapper';
+  const canvasClass = (connectingFrom !== null || bulkConnectFrom !== null) ? 'canvas-wrapper connecting-mode' : 'canvas-wrapper';
 
   // ==================================
   // EXPORT / IMPORT TOPOLOGIE
@@ -1673,6 +2113,7 @@ function AppContent() {
   }
 
   function handleImport(json: string) {
+    pushHistory();
     try {
       var data = JSON.parse(json);
 
@@ -1739,6 +2180,7 @@ function AppContent() {
 
   // načtení předdefinované topologie
   function handleLoadPreset(preset: { routers: { id: string; label: string; position: { x: number; y: number } }[]; links: { source: string; target: string; metric: number }[] }) {
+    pushHistory();
     var newNodes: Node[] = preset.routers.map(function (r) {
       return {
         id: r.id,
@@ -1804,6 +2246,10 @@ function AppContent() {
         onToggleSettings={handleToggleSettings}
         isSettingsOpen={isSettingsOpen}
         onOpenTopology={function () { setIsTopologyOpen(true); }}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        canUndo={canUndo}
+        canRedo={canRedo}
       />
 
       {/* nastaveni panel — dropdown pod toolbar */}
@@ -1850,7 +2296,8 @@ function AppContent() {
         <div
           className={canvasClass}
           onMouseMove={function handleMouseMove(e) {
-            if (connectingFrom === null) {
+            // aktivni jen v connecting mode (single nebo bulk)
+            if (connectingFrom === null && bulkConnectFrom === null) {
               return;
             }
             setMousePosition({ x: e.clientX, y: e.clientY });
@@ -1860,15 +2307,31 @@ function AppContent() {
             const nodeEl = target.closest('.react-flow__node');
             if (nodeEl) {
               const nodeId = nodeEl.getAttribute('data-id');
-              if (nodeId && nodeId !== connectingFrom) {
-                // nesnap na uz propojeny router
-                const isAlready = edges.some(function (e) {
-                  return (e.source === connectingFrom && e.target === nodeId) ||
-                         (e.source === nodeId && e.target === connectingFrom);
-                });
-                if (!isAlready) {
-                  setSnapTarget(nodeId);
-                  return;
+              if (nodeId) {
+                // single connect mode
+                if (connectingFrom !== null && nodeId !== connectingFrom) {
+                  const isAlready = edges.some(function (e) {
+                    return (e.source === connectingFrom && e.target === nodeId) ||
+                           (e.source === nodeId && e.target === connectingFrom);
+                  });
+                  if (!isAlready) {
+                    setSnapTarget(nodeId);
+                    return;
+                  }
+                }
+                // bulk connect mode
+                if (bulkConnectFrom !== null && bulkConnectFrom.indexOf(nodeId) === -1) {
+                  // snap pokud alespon 1 zdrojovy router jeste neni propojeny s cilem
+                  var hasNewConnection = bulkConnectFrom.some(function (srcId) {
+                    return !edges.some(function (e) {
+                      return (e.source === srcId && e.target === nodeId) ||
+                             (e.source === nodeId && e.target === srcId);
+                    });
+                  });
+                  if (hasNewConnection) {
+                    setSnapTarget(nodeId);
+                    return;
+                  }
                 }
               }
             }
@@ -1883,16 +2346,20 @@ function AppContent() {
             onConnect={handleConnect}
             onNodeClick={handleNodeClick}
             onPaneClick={handlePaneClick}
+            onNodeDragStart={handleNodeDragStart}
             onNodeDragStop={handleNodeDragStop}
             onDropRouter={handleAddRouter}
             onNodeContextMenu={handleNodeContextMenu}
             onEdgeContextMenu={handleEdgeContextMenu}
+            onSelectionContextMenu={handleSelectionContextMenu}
+            onDeleteSelected={handleDeleteSelected}
             backgroundType={backgroundType}
             snapToGrid={snapToGrid}
             showMetrics={showMetrics}
           />
 
           {/* vizualni propojovaci cara za kurzorem */}
+          {/* vizualni propojovaci cara — single connect */}
           {connectingFrom !== null && mousePosition !== null && (
             <svg
               style={{
@@ -1905,21 +2372,64 @@ function AppContent() {
               }}
             >
               {(function renderConnectionLine() {
-                // najit zdrojovy node
                 const sourceEl = document.querySelector('[data-id="' + connectingFrom + '"]');
-                if (!sourceEl) {
-                  return null;
-                }
+                if (!sourceEl) { return null; }
                 const sourceRect = sourceEl.getBoundingClientRect();
                 const wrapperEl = sourceEl.closest('.canvas-wrapper');
-                if (!wrapperEl) {
-                  return null;
-                }
+                if (!wrapperEl) { return null; }
                 const wrapperRect = wrapperEl.getBoundingClientRect();
 
-                // stred zdrojoveho nodu
                 const sx = sourceRect.left + sourceRect.width / 2 - wrapperRect.left;
                 const sy = sourceRect.top + sourceRect.height / 2 - wrapperRect.top;
+
+                let tx = mousePosition.x - wrapperRect.left;
+                let ty = mousePosition.y - wrapperRect.top;
+                let snapped = false;
+
+                if (snapTarget !== null) {
+                  const targetEl = document.querySelector('[data-id="' + snapTarget + '"]');
+                  if (targetEl) {
+                    const targetRect = targetEl.getBoundingClientRect();
+                    tx = targetRect.left + targetRect.width / 2 - wrapperRect.left;
+                    ty = targetRect.top + targetRect.height / 2 - wrapperRect.top;
+                    snapped = true;
+                  }
+                }
+
+                return (
+                  <React.Fragment>
+                    <line x1={sx} y1={sy} x2={tx} y2={ty}
+                      stroke="var(--primary)" strokeWidth={2}
+                      strokeDasharray={snapped ? 'none' : '6 4'}
+                      opacity={snapped ? 1 : 0.7} />
+                    {snapped && (
+                      <React.Fragment>
+                        <circle cx={tx} cy={ty} r={8} fill="var(--primary)" opacity={0.2} />
+                        <circle cx={tx} cy={ty} r={4} fill="var(--primary)" />
+                      </React.Fragment>
+                    )}
+                  </React.Fragment>
+                );
+              })()}
+            </svg>
+          )}
+
+          {/* vizualni propojovaci cary — bulk connect (vice car z kazdeho zdroje) */}
+          {bulkConnectFrom !== null && mousePosition !== null && (
+            <svg
+              style={{
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
+                height: '100%',
+                pointerEvents: 'none',
+                zIndex: 10,
+              }}
+            >
+              {(function renderBulkConnectionLines() {
+                const wrapperEl = document.querySelector('.canvas-wrapper');
+                if (!wrapperEl) { return null; }
+                const wrapperRect = wrapperEl.getBoundingClientRect();
 
                 // cilovy bod — snap na router nebo mys
                 let tx = mousePosition.x - wrapperRect.left;
@@ -1938,34 +2448,36 @@ function AppContent() {
 
                 return (
                   <React.Fragment>
-                    {/* propojovaci cara */}
-                    <line
-                      x1={sx}
-                      y1={sy}
-                      x2={tx}
-                      y2={ty}
-                      stroke="var(--primary)"
-                      strokeWidth={2}
-                      strokeDasharray={snapped ? 'none' : '6 4'}
-                      opacity={snapped ? 1 : 0.7}
-                    />
+                    {bulkConnectFrom.map(function (sourceId) {
+                      const sourceEl = document.querySelector('[data-id="' + sourceId + '"]');
+                      if (!sourceEl) { return null; }
+                      const sourceRect = sourceEl.getBoundingClientRect();
+                      const sx = sourceRect.left + sourceRect.width / 2 - wrapperRect.left;
+                      const sy = sourceRect.top + sourceRect.height / 2 - wrapperRect.top;
 
+                      // zjistit jestli tento konkretni zdroj uz je propojeny s cilem
+                      var alreadyConnected = false;
+                      if (snapTarget !== null) {
+                        alreadyConnected = edges.some(function (e) {
+                          return (e.source === sourceId && e.target === snapTarget) ||
+                                 (e.source === snapTarget && e.target === sourceId);
+                        });
+                      }
+
+                      return (
+                        <line key={sourceId}
+                          x1={sx} y1={sy} x2={tx} y2={ty}
+                          stroke={alreadyConnected ? 'var(--text-secondary)' : 'var(--primary)'}
+                          strokeWidth={2}
+                          strokeDasharray={snapped ? 'none' : '6 4'}
+                          opacity={alreadyConnected ? 0.3 : (snapped ? 1 : 0.7)} />
+                      );
+                    })}
                     {/* snap tecka na cilovem routeru */}
                     {snapped && (
                       <React.Fragment>
-                        <circle
-                          cx={tx}
-                          cy={ty}
-                          r={8}
-                          fill="var(--primary)"
-                          opacity={0.2}
-                        />
-                        <circle
-                          cx={tx}
-                          cy={ty}
-                          r={4}
-                          fill="var(--primary)"
-                        />
+                        <circle cx={tx} cy={ty} r={8} fill="var(--primary)" opacity={0.2} />
+                        <circle cx={tx} cy={ty} r={4} fill="var(--primary)" />
                       </React.Fragment>
                     )}
                   </React.Fragment>
@@ -2006,6 +2518,30 @@ function AppContent() {
         onDelete={handleDeleteRouter}
         onClose={handleContextMenuClose}
       />
+
+      {/* context menu — hromadny vyber (group) */}
+      {groupContextMenu.isOpen && (
+        <>
+          <div
+            className="context-menu-overlay"
+            onMouseDown={handleGroupContextMenuClose}
+          />
+          <div className="context-menu" style={{ left: groupContextMenu.x, top: groupContextMenu.y }}>
+            <div className="dropdown-menu">
+              <div className="context-menu-header">
+                Vybráno {groupContextMenu.nodeIds.length} {groupContextMenu.nodeIds.length === 1 ? 'router' : groupContextMenu.nodeIds.length >= 2 && groupContextMenu.nodeIds.length <= 4 ? 'routery' : 'routerů'}
+              </div>
+              <div className="dropdown-item" onClick={handleGroupConnect}>
+                Propojit vybrané s…
+              </div>
+              <div className="context-menu-separator" />
+              <div className="dropdown-item danger" onClick={handleGroupDelete}>
+                Smazat vybrané
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* context menu — pravy klik na hranu */}
       {edgeContextMenu.isOpen && (

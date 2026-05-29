@@ -117,18 +117,19 @@ export function TabBar({
   // zavrit context menu pri kliknuti mimo nej
   useEffect(function () {
     if (!contextMenu.isOpen) { return; }
-    function handleClickOutside(e: MouseEvent) {
+    function handleClickOutside(e: PointerEvent) {
       if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
         setContextMenu(function (prev) { return { ...prev, isOpen: false }; });
       }
     }
     // pouzit setTimeout aby se listener pridal az po aktualnim event cyklu
+    // pouzit pointerdown + capture:true protoze canvas zachytava mousedown
     var timer = setTimeout(function () {
-      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('pointerdown', handleClickOutside as EventListener, true);
     }, 0);
     return function () {
       clearTimeout(timer);
-      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('pointerdown', handleClickOutside as EventListener, true);
     };
   }, [contextMenu.isOpen]);
 
@@ -176,56 +177,170 @@ export function TabBar({
     onCloseTab(tabId);
   }
 
-  // drag & drop handlery
-  function handleDragStart(e: React.DragEvent, tabId: string) {
-    setDragTabId(tabId);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', tabId);
-    // pouzit prazdny pruhledny obrazek jako ghost — tab se presouva sam
-    var emptyImg = document.createElement('img');
-    emptyImg.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-    e.dataTransfer.setDragImage(emptyImg, 0, 0);
+  // custom drag — pointer-based, tab follows mouse horizontally
+  const dragStateRef = useRef<{
+    tabId: string;
+    startX: number;
+    originalIndex: number;
+    pointerId: number;
+  } | null>(null);
+  const [dragOffset, setDragOffset] = useState<number>(0);
+  const [dragTargetIndex, setDragTargetIndex] = useState<number>(-1);
+  const [dragOriginalIndex, setDragOriginalIndex] = useState<number>(-1);
+
+  const DRAG_THRESHOLD = 5; // px pred aktivaci vizualniho tazeni
+
+  function handlePointerDown(e: React.PointerEvent, tabId: string) {
+    // jen levy klik
+    if (e.button !== 0) { return; }
+    var tabEl = tabRefs.current[tabId];
+    if (!tabEl || editingTabId === tabId) { return; }
+
+    var origIndex = tabs.findIndex(function (t) { return t.id === tabId; });
+    if (origIndex === -1) { return; }
+
+    // zabranit vyberu textu pri tazeni
+    e.preventDefault();
+    tabEl.setPointerCapture(e.pointerId);
+
+    dragStateRef.current = {
+      tabId: tabId,
+      startX: e.clientX,
+      originalIndex: origIndex,
+      pointerId: e.pointerId,
+    };
+    // NESTAVIME dragTabId hned — cekame na prah pohybu
   }
 
-  function handleDragOver(e: React.DragEvent, tabId: string) {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    if (dragTabId !== null && tabId !== dragTabId) {
-      // okamzite preradit tab — vizualne se presouva v realnem case
-      var fromIndex = tabs.findIndex(function (t) { return t.id === dragTabId; });
-      var toIndex = tabs.findIndex(function (t) { return t.id === tabId; });
-      if (fromIndex !== -1 && toIndex !== -1) {
-        onReorderTabs(fromIndex, toIndex);
+  function handlePointerMove(e: React.PointerEvent) {
+    var state = dragStateRef.current;
+    if (!state) { return; }
+
+    var dx = e.clientX - state.startX;
+
+    // aktivovat drag az po prahu
+    if (dragTabId === null) {
+      if (Math.abs(dx) < DRAG_THRESHOLD) { return; }
+      // prah prekrocen — aktivovat drag
+      setDragTabId(state.tabId);
+      setDragOriginalIndex(state.originalIndex);
+      setDragTargetIndex(state.originalIndex);
+    }
+
+    setDragOffset(dx);
+
+    // vypocitat nad kterym slotem je tazeny tab
+    var container = tabsContainerRef.current;
+    if (!container) { return; }
+
+    // zjistit aktualni pozici stredu tazeneho tabu
+    var dragEl = tabRefs.current[state.tabId];
+    if (!dragEl) { return; }
+    var dragRect = dragEl.getBoundingClientRect();
+    var dragCenter = dragRect.left + dragRect.width / 2 + dx;
+
+    // najit cilovy index podle pozice
+    var newTarget = state.originalIndex;
+    for (var i = 0; i < tabs.length; i++) {
+      if (tabs[i].id === state.tabId) { continue; }
+      var otherEl = tabRefs.current[tabs[i].id];
+      if (!otherEl) { continue; }
+      var otherRect = otherEl.getBoundingClientRect();
+      var otherCenter = otherRect.left + otherRect.width / 2;
+
+      if (i < state.originalIndex && dragCenter < otherCenter) {
+        newTarget = Math.min(newTarget, i);
+      }
+      if (i > state.originalIndex && dragCenter > otherCenter) {
+        newTarget = Math.max(newTarget, i);
       }
     }
+    setDragTargetIndex(newTarget);
   }
 
-  function handleDrop(e: React.DragEvent) {
-    e.preventDefault();
+  function handlePointerUp(e: React.PointerEvent) {
+    var state = dragStateRef.current;
+    if (!state) { return; }
+
+    try {
+      state.pointerId && tabRefs.current[state.tabId]?.releasePointerCapture(state.pointerId);
+    } catch (_) { /* ignore */ }
+
+    // provest finalni prerazeni
+    if (dragTargetIndex !== state.originalIndex && dragTargetIndex >= 0) {
+      onReorderTabs(state.originalIndex, dragTargetIndex);
+    }
+
+    dragStateRef.current = null;
     setDragTabId(null);
+    setDragOffset(0);
+    setDragTargetIndex(-1);
+    setDragOriginalIndex(-1);
   }
 
-  function handleDragEnd() {
-    setDragTabId(null);
+  // vypocitat shift pro kazdy tab (kolik pixelu se posunout aby udelal misto)
+  function getTabShift(tabId: string, tabIndex: number): number {
+    if (dragTabId === null || dragOriginalIndex < 0 || dragTargetIndex < 0) { return 0; }
+    if (tabId === dragTabId) { return 0; } // tazeny tab se posouva jinak
+
+    var dragEl = tabRefs.current[dragTabId];
+    if (!dragEl) { return 0; }
+    var dragWidth = dragEl.getBoundingClientRect().width;
+
+    // tab se posouva doleva/doprava aby udelal misto tazenemu tabu
+    if (dragOriginalIndex < dragTargetIndex) {
+      // tazeni doprava — taby mezi original a target se posunou doleva
+      if (tabIndex > dragOriginalIndex && tabIndex <= dragTargetIndex) {
+        return -dragWidth;
+      }
+    } else if (dragOriginalIndex > dragTargetIndex) {
+      // tazeni doleva — taby mezi target a original se posunou doprava
+      if (tabIndex >= dragTargetIndex && tabIndex < dragOriginalIndex) {
+        return dragWidth;
+      }
+    }
+    return 0;
   }
 
   return (
     <div className="tab-bar">
       <div className="tab-bar-tabs" ref={tabsContainerRef}>
-        {/* sliding active indicator */}
+        {/* sliding active indicator — skryt pri tazeni */}
         <div
           className={'tab-indicator' + (indicatorStyle.initialized ? ' ready' : '')}
           style={{
             transform: 'translateX(' + indicatorStyle.left + 'px)',
             width: indicatorStyle.width + 'px',
+            opacity: dragTabId !== null ? 0 : 1,
           }}
         />
 
-        {tabs.map(function (tab) {
+        {tabs.map(function (tab, tabIndex) {
           const isActive = tab.id === activeTabId;
           const isEditing = tab.id === editingTabId;
           const isDragging = tab.id === dragTabId;
+          const shift = getTabShift(tab.id, tabIndex);
 
+          // styl pro tazeny tab — nasleduje mys, bez transition
+          // styl pro ostatni taby — posunou se aby udelaly misto, s transition
+          var tabStyle: React.CSSProperties | undefined;
+          if (isDragging) {
+            tabStyle = {
+              transform: 'translateX(' + dragOffset + 'px)',
+              transition: 'none',
+            };
+          } else if (shift !== 0) {
+            tabStyle = {
+              transform: 'translateX(' + shift + 'px)',
+              transition: 'transform 0.2s ease',
+            };
+          } else if (dragTabId !== null) {
+            // neni posunuty, ale drag probiha — resetovat s transition
+            tabStyle = {
+              transform: 'translateX(0px)',
+              transition: 'transform 0.2s ease',
+            };
+          }
           return (
             <div
               key={tab.id}
@@ -235,6 +350,7 @@ export function TabBar({
                 (isActive ? ' active' : '') +
                 (isDragging ? ' dragging' : '')
               }
+              style={tabStyle}
               onClick={function () {
                 if (!isEditing) {
                   onSwitchTab(tab.id);
@@ -249,11 +365,11 @@ export function TabBar({
                   tabId: tab.id,
                 });
               }}
-              draggable={!isEditing}
-              onDragStart={function (e) { handleDragStart(e, tab.id); }}
-              onDragOver={function (e) { handleDragOver(e, tab.id); }}
-              onDrop={handleDrop}
-              onDragEnd={handleDragEnd}
+              onPointerDown={function (e) { handlePointerDown(e, tab.id); }}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              draggable={false}
+              onDragStart={function (e) { e.preventDefault(); }}
             >
               {isEditing ? (
                 <>
