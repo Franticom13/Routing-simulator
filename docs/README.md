@@ -65,6 +65,7 @@ src/
       EIGRP.ts                     — implementace EIGRP
   components/
     Toolbar.tsx                    — horni toolbar
+    TabBar.tsx                     — lista tabu (multi-tab system)
     Sidebar.tsx                    — levy sidebar
     FloatingBar.tsx                — plovouci bar dole
     ProtocolSelect.tsx             — custom dropdown pro protokol

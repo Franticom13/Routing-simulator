@@ -8,10 +8,13 @@ Krok po kroku, jak uzivatel pracuje s aplikaci od otevreni po vizualizaci cesty.
 
 Po nacteni stranky uzivatel vidi:
 
-- **Toolbar** nahore — nazev "Routing Simulator" + tlacitka Topologie a Nastavení
-- **Sidebar** vlevo — sekce Přidat (prvek "Nový router"), sekce Routery s 7 pocatecnimi uzly (A-G), polozka Cesta a sekce Tabulka (pokud je vybran router)
-- **Canvas** uprostred — platno s teckovym vzorem, 7 routeru a 8 propoju
-- **FloatingBar** dole — protokol "RIP", tlacitka simulace, badge "Pripraveno"
+- **Toolbar** nahore -- nazev "Routing Simulator" + tlacitka Topologie a Nastaveni
+- **TabBar** pod toolbarem (napravo od sidebaru) -- lista tabu s aktivnim tabem, tlacitko `+` pro novy tab
+- **Sidebar** vlevo -- sekce Pridat (prvek "Novy router"), sekce Routery s 7 pocatecnimi uzly (A-G), polozka Cesta a sekce Tabulka (pokud je vybran router)
+- **Canvas** uprostred -- platno s teckovym vzorem, 7 routeru a 8 propoju
+- **FloatingBar** dole -- protokol "RIP", tlacitka simulace, badge "Pripraveno"
+
+Pokud uzivatel aplikaci navstivil drive, automaticky se nacte predchozi stav (taby, topologie, simulace) z localStorage.
 
 Pocatecni topologie je prednastavena pro demonstraci:
 
@@ -26,6 +29,42 @@ Pocatecni topologie je prednastavena pro demonstraci:
                           |
                         Router G
 ```
+
+---
+
+## 1.5. Sprava tabu (multi-tab)
+
+Aplikace podporuje vice nezavislych tabu -- kazdy tab ma vlastni topologii, simulaci a stav.
+
+### Vytvoreni noveho tabu
+
+1. Uzivatel klikne na tlacitko **[+]** na konci TabBaru
+2. Vytvori se prazdny tab s automatickym nazvem (Tab 1, Tab 2, ...)
+3. Aktivni tab se prepne na novy
+
+### Prepinani mezi taby
+
+1. Uzivatel klikne na tab v TabBaru
+2. Stav aktualniho tabu se automaticky ulozi
+3. Nacte se stav ciloveho tabu (topologie, simulace, vyber routeru)
+
+### Prejmenovani tabu
+
+1. Uzivatel klikne pravym tlacitkem na tab
+2. Z kontextoveho menu vybere "Prejmenovat"
+3. Nazev se zmeni na editovatelny input, uzivatel zada novy nazev
+4. Potvrzeni Enterem nebo kliknutim mimo, zruseni Escapem
+
+### Zmena poradi tabu
+
+1. Uzivatel chyti tab mysi a pretahne ho na novou pozici
+2. Taby se okamzite prerazuji behem pretahovani
+
+### Zavreni tabu
+
+1. Uzivatel klikne na krizek na tabu, nebo prave tlacitko → "Zavrit tab"
+2. Tab se zavre; pokud byl aktivni, prepne se na sousedni
+3. Posledni tab nelze zavrit (krizek se nezobrazuje)
 
 ---
 

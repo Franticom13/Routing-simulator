@@ -21,6 +21,13 @@ export interface SimulationEngine {
 Engine pouziva funkcionalni styl — vsechny operace jsou exportovane funkce, ktere berou `engine` jako prvni parametr. Engine je mutovany na miste (ne immutabilne), coz je
 zamerne — stav simulace je jedina mista kde mutace probihaji.
 
+> **Multi-tab izolace:** V multi-tab systemu kazdy tab implicitne vlastni svuj
+> simulacni engine. App.tsx drzi jednu `simulationRef`, ktera se pri prepnuti tabu
+> resetuje na `null` (`simulationRef.current = null` v `loadTabState()`). Pri dalsim
+> kroku simulace se engine znovu inicializuje z topologie a stavu daneho tabu.
+> `NetworkState` kazdeho tabu je ulozena v `TabData.simulationState` -- pri ulozeni
+> do localStorage se vsak `simulationState` odstraní (neni serializovatelny).
+
 ---
 
 ## createSimulation()

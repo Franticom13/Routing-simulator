@@ -23,7 +23,7 @@ Umoznuje uzivateli graficky navrhovat sitovou topologii a krokove simulovat rout
 
 ```
 src/
-  App.tsx                  ← vstupni bod, propojeni vsech vrstev
+  App.tsx                  ← vstupni bod, propojeni vsech vrstev, multi-tab stav
   index.css                ← kompletni design system (850 radku)
   core/                    ← cista logika bez zavislosti na Reactu
     types.ts               ← sdilene typy (RouterNode, NetworkLink, ...)
@@ -36,6 +36,7 @@ src/
       EIGRP.ts             ← EIGRP implementace (DUAL algoritmus)
   components/              ← React komponenty
     Toolbar.tsx            ← horni lista s editacnimi nastroji
+    TabBar.tsx             ← lista tabu (multi-tab system, drag & drop, prejmenovani)
     Sidebar.tsx            ← levy panel s routovaci tabulkou
     FloatingBar.tsx        ← plovouci bar dole se simulacnim ovladanim
     ProtocolSelect.tsx     ← custom dropdown pro vyber protokolu
@@ -58,36 +59,38 @@ Aplikace je rozdelena do dvou hlavnich vrstev, ktere komunikuji pres sdilene typ
 ```
 ┌───────────────────────────────────────────────────────┐
 │                    App.tsx (orchestrator)              │
-│   drzi stav: nodes, edges, routingTables, iteration   │
-│   propojuje frontend a core                           │
+│   drzi stav: tabs[], activeTabId, nodes, edges, ...   │
+│   propojuje frontend a core, multi-tab izolace        │
 ├─────────────────────────┬─────────────────────────────┤
 │    FRONTEND (components)│       CORE (core/)          │
 │                         │                             │
 │  Toolbar ──────────────►│                             │
-│  Sidebar ◄──────────────│  types.ts (sdilene typy)   │
-│  FloatingBar ──────────►│                             │
-│  Canvas ◄──────────────►│  graph.ts (operace grafu)  │
-│  RouterNode             │                             │
-│  NetworkEdge            │  simulation.ts (engine)     │
-│  RoutingTable           │                             │
-│  MetricDialog           │  protocols/                 │
-│  TopologyDialog         │    Protocol.ts (rozhrani)   │
-│  ProtocolSelect         │    RIP.ts                   │
-│  Icons                  │    OSPF.ts                  │
-│                         │    EIGRP.ts                 │
+│  TabBar ───────────────►│  types.ts (sdilene typy)   │
+│  Sidebar ◄──────────────│                             │
+│  FloatingBar ──────────►│  graph.ts (operace grafu)  │
+│  Canvas ◄──────────────►│                             │
+│  RouterNode             │  simulation.ts (engine)     │
+│  NetworkEdge            │                             │
+│  RoutingTable           │  protocols/                 │
+│  MetricDialog           │    Protocol.ts (rozhrani)   │
+│  TopologyDialog         │    RIP.ts                   │
+│  ProtocolSelect         │    OSPF.ts                  │
+│  Icons                  │    EIGRP.ts                 │
 └─────────────────────────┴─────────────────────────────┘
 ```
 
 ### Tok dat
 
 1. **Uzivatel** pridava routery a propoje v editoru (Canvas, Toolbar)
-2. **App.tsx** drzi React Flow nodes/edges jako zdroj pravdy
+2. **App.tsx** drzi React Flow nodes/edges jako zdroj pravdy — kazdy tab (`TabData`) ma vlastni sadu
 3. Pred simulaci se zavola `convertToNetworkState()` z `graph.ts` — prevede React Flow format na interni `NetworkState`
 4. **SimulationEngine** (z `simulation.ts`) dostane `NetworkState` a vybrany `Protocol`
 5. Kazdy krok (`simStep()`) vola `protocol.step(state)` — vraci novy stav + zmeny
 6. **App.tsx** aktualizuje React stav (routingTables, changes, iteration)
-7. **Sidebar** a **RoutingTable** zobrazuji aktualni routovaci tabulky
+7. **Sidebar** a **RoutingTable** zobrazuji aktualni routovaci tabulky aktivniho tabu
 8. **Canvas** zvyraznuje zmenene routery (zluta barva) a cestu (teal barva)
+9. **TabBar** umoznuje prepinani mezi taby — pri prepnuti se `saveActiveTabState()` ulozi stav aktualniho tabu a `loadTabState()` nacte stav ciloveho tabu
+10. **localStorage** persistuje vsechny taby automaticky (debounced 200ms) pres `saveTabsToStorage()`
 
 ### Dukaz oddeleni vrstev
 

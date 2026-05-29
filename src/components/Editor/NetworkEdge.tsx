@@ -15,6 +15,7 @@ interface NetworkEdgeData {
   metric?: number;
   isChanged?: boolean;
   isPathHighlighted?: boolean;
+  isHovered?: boolean;
   particleKey?: number;
   particleTarget?: string;
   particlePills?: string[];
@@ -141,6 +142,12 @@ export function NetworkEdge({
     strokeWidth = 3;
   }
 
+  if (!selected && edgeData.isHovered) {
+    strokeColor = 'var(--primary-light, var(--primary))';
+    strokeWidth = 2.5;
+    edgeClass = 'edge-hovered';
+  }
+
   // zobrazeni metriky — podle showMetrics flagu (default: true)
   var metricsVisible = edgeData.showMetrics !== false;
   let metricLabel: string;
@@ -181,9 +188,12 @@ export function NetworkEdge({
           stroke: strokeColor,
           strokeWidth: strokeWidth,
           strokeDasharray: strokeDasharray,
-          transition: 'stroke 0.15s ease, stroke-width 0.15s ease',
+          transition: 'stroke 0.15s ease, stroke-width 0.15s ease, opacity 0.15s ease',
+          cursor: 'pointer',
+          opacity: edgeData.isHovered && !selected ? 0.7 : undefined,
         }}
         className={edgeClass}
+        interactionWidth={20}
       />
 
       {/* label s metrikou na strednim bodu — podminene zobrazeni */}
