@@ -159,7 +159,7 @@ export function Canvas({
   }, [isSelecting]);
 
   // dokoncit selekci — vybrat nody a edgy uvnitr obdelniku
-  const handleMouseUp = useCallback(function (e: MouseEvent) {
+  const handleMouseUp = useCallback(function () {
     if (!isSelecting || !selectionStart || !selectionEnd || !wrapperRef.current) {
       setIsSelecting(false);
       return;

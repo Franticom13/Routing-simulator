@@ -163,10 +163,11 @@ export function TabBar({
     var tab = tabs.find(function (t) { return t.id === tabId; });
     setContextMenu(function (prev) { return { ...prev, isOpen: false }; });
     if (tab) {
+      var foundTab = tab;
       // maly delay aby se context menu stihl zavrit pred otevrenim inputu
       setTimeout(function () {
-        setEditingTabId(tab.id);
-        setEditValue(tab.name);
+        setEditingTabId(foundTab.id);
+        setEditValue(foundTab.name);
       }, 10);
     }
   }
@@ -258,7 +259,7 @@ export function TabBar({
     setDragTargetIndex(newTarget);
   }
 
-  function handlePointerUp(e: React.PointerEvent) {
+  function handlePointerUp() {
     var state = dragStateRef.current;
     if (!state) { return; }
 
@@ -395,7 +396,7 @@ export function TabBar({
                 <button
                   className="tab-close"
                   draggable={false}
-                  onMouseDown={function (e) { e.stopPropagation(); }}
+                  onPointerDown={function (e) { e.stopPropagation(); }}
                   onClick={function (e) {
                     e.stopPropagation();
                     e.preventDefault();
