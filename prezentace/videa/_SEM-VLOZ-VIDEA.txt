@@ -1,0 +1,9 @@
+ScreenStudio klipy sem — pojmenuj je přesně takto (.mp4):
+
+  demo-editor.mp4     → vytvoření topologie v editoru (slide 4 "Jak to funguje")
+  demo-simulace.mp4   → krokování simulace + zvýraznění změn (slide 5 "Simulace v akci")
+  demo-cesta.mp4      → vizualizace nejkratší cesty (slide 7 "Bonus")
+
+Dokud tu soubor není, ukáže se v prezentaci hezký placeholder.
+Jakmile ho sem vložíš se správným názvem, video se samo přehraje (smyčka).
+Doporučení: formát MP4 (H.264), klidně bez zvuku, 10–20 s.
